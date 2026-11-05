@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="toy-bgm 配乐生成器：按视频时长、情绪与风格生成有段落的器乐 BGM，同种子结果固定，可导出 WAV 或 MIDI。">
+<title>toy-bgm · 按视频时长，生成一首有段落的曲子</title>
+<style>
+  :root{
+    --bg:#0b0c0f;
+    --bg-deep:#07080a;
+    --surface:#101216;
+    --surface-2:#15181d;
+    --line:#242830;
+    --line-soft:#1a1d23;
+    --fg:#f1e9dd;
+    --fg-dim:#b9b1a5;
+    --muted:#8f8983;
+    --accent:#e0a955;
+    --accent-soft:#f2d6a4;
+    --accent-dim:#6b5227;
+    --font-display:Georgia,"Songti SC","Source Han Serif SC","Noto Serif CJK SC","STSong","SimSun",serif;
+    --font-ui:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;
+    --font-mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --ease:cubic-bezier(.22,.72,.2,1);
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    min-height:100vh;
+    background:var(--bg);
+    color:var(--fg);
+    font-family:var(--font-ui);
+    font-size:14px;
+    line-height:1.6;
+    overflow-x:hidden;
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+  }
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  input{font:inherit;color:inherit}
+  em{font-style:normal;color:var(--fg-dim)}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+
+  /* ---------- background layers ---------- */
+  .ambient{
+    position:fixed;inset:-25%;z-index:0;pointer-events:none;
+    background:
+      radial-gradient(40% 34% at 26% 16%, oklch(52% .09 68 / .16), transparent 68%),
+      radial-gradient(38% 32% at 78% 62%, oklch(44% .05 250 / .11), transparent 72%),
+      radial-gradient(46% 40% at 56% 98%, oklch(46% .07 52 / .07), transparent 74%);
+    animation:breathe 28s ease-in-out infinite alternate;
+  }
+  @keyframes breathe{
+    from{transform:translate3d(-1.2%,-1.4%,0) scale(1.02)}
+    to{transform:translate3d(1.4%,1.2%,0) scale(1.08)}
+  }
+  .gridlines{
+    position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.5;
+    background-image:
+      repeating-linear-gradient(90deg, rgba(241,233,221,.042) 0 1px, transparent 1px 88px),
+      repeating-linear-gradient(0deg, rgba(241,233,221,.028) 0 1px, transparent 1px 88px);
+    -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 10%,#000 90%,transparent 100%);
+    mask-image:linear-gradient(180deg,transparent 0,#000 10%,#000 90%,transparent 100%);
+  }
+  .vignette{
+    position:fixed;inset:0;z-index:0;pointer-events:none;
+    background:radial-gradient(120% 92% at 50% 0%, transparent 42%, rgba(0,0,0,.52) 100%);
+  }
+
+  /* ---------- shell ---------- */
+  .page{position:relative;z-index:2;min-height:100vh;display:flex;flex-direction:column}
+  .wrap{width:100%;max-width:1160px;margin:0 auto;padding:0 clamp(16px,4vw,40px)}
+
+  .masthead{border-bottom:1px solid var(--line-soft)}
+  .masthead .wrap{height:58px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+  .brand{display:flex;align-items:center;gap:11px;min-width:0}
+  .brand__mark{width:3px;height:13px;background:var(--accent);flex:none}
+  .brand__name{font-family:var(--font-mono);font-size:13px;letter-spacing:.14em;color:var(--fg);white-space:nowrap}
+  .brand__sub{font-size:11px;letter-spacing:.14em;color:var(--muted);padding-left:12px;border-left:1px solid var(--line);white-space:nowrap}
+  .state{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;color:var(--muted);white-space:nowrap}
+  .state__dot{width:5px;height:5px;border-radius:50%;background:#4d483f;flex:none;transition:background-color .3s}
+  .state.is-playing{color:var(--fg-dim)}
+  .state.is-playing .state__dot{background:var(--accent)}
+
+  .page-main{flex:1;padding-top:clamp(22px,4vh,44px);padding-bottom:clamp(16px,2.6vh,30px)}
+
+  /* ---------- hero ---------- */
+  .hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,360px);gap:26px 48px;align-items:end;margin-bottom:clamp(20px,3vh,32px)}
+  .hero__title{
+    margin:0;
+    font-family:var(--font-display);
+    font-weight:400;
+    font-size:clamp(30px,3.1vw,40px);
+    line-height:1.36;
+    letter-spacing:.012em;
+    color:#f5ede1;
+  }
+  .hero__sub{margin:0;font-size:13.5px;line-height:1.95;color:var(--muted);letter-spacing:.01em}
+  .hero__sub span{display:block}
+
+  /* ---------- machine ---------- */
+  .machine{
+    border:1px solid var(--line);
+    border-radius:4px;
+    background:linear-gradient(180deg,#101216 0%,#0d0f13 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(241,233,221,.05),
+      0 18px 40px -34px #000;
+  }
+
+  .console{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    grid-template-areas:
+      "params seed"
+      "style  style";
+    gap:20px 24px;
+    padding:clamp(15px,2vw,20px);
+    border-bottom:1px solid var(--line);
+  }
+  @media (min-width:1160px){
+    .console{
+      grid-template-columns:minmax(0,.95fr) minmax(0,.95fr) minmax(0,1.3fr);
+      grid-template-areas:"params seed style";
+      gap:24px;
+    }
+  }
+  @media (max-width:700px){
+    .console{grid-template-columns:1fr;grid-template-areas:"params" "seed" "style";gap:18px}
+  }
+  .console__params{grid-area:params;display:flex;flex-direction:column;gap:14px;min-width:0}
+  .console__styles{grid-area:style;min-width:0}
+  .field{min-width:0}
+  .field--seed{grid-area:seed}
+  .field__head{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+  .field__label{font-size:12px;letter-spacing:.16em;color:var(--fg-dim)}
+  .field__en{font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;color:var(--muted);transform:translateY(-1px)}
+
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{
+    height:36px;padding:0 13px;
+    min-width:52px;
+    border:1px solid var(--line);
+    border-radius:3px;
+    background:#0d0f13;
+    color:var(--fg-dim);
+    font-size:13px;letter-spacing:.02em;
+    transition:background-color .18s var(--ease),border-color .18s var(--ease),color .18s var(--ease),transform .1s;
+  }
+  .chip:hover{background:#171b21;color:var(--fg);border-color:#39404b}
+  .chip:active{transform:translateY(1px)}
+  .chip[aria-pressed="true"]{
+    background:#1d1810;
+    border-color:#5b4828;
+    color:var(--accent-soft);
+    box-shadow:inset 0 0 0 1px rgba(224,169,85,.08);
+  }
+  .chip[aria-pressed="true"]:hover{background:#241d13;color:#f8e3bf;border-color:#6b5227}
+
+  .seed-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+  .seed-input{
+    width:96px;height:36px;padding:0 10px;
+    background:#08090c;
+    border:1px solid var(--line);
+    border-radius:3px;
+    font-family:var(--font-mono);
+    font-size:14px;
+    letter-spacing:.06em;
+    color:var(--fg);
+    appearance:textfield;-moz-appearance:textfield;
+    transition:border-color .18s;
+  }
+  .seed-input:hover{border-color:#39404b}
+  .seed-input:focus-visible{outline-offset:2px}
+  .seed-input::-webkit-outer-spin-button,.seed-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .seed-status{
+    margin:9px 0 0;
+    font-family:var(--font-mono);
+    font-size:11px;
+    line-height:1.7;
+    letter-spacing:.03em;
+    color:var(--muted);
+    min-height:18px;
+  }
+
+  .styles{border-top:1px solid var(--line-soft)}
+  .style{
+    display:grid;
+    grid-template-columns:86px minmax(0,1.05fr) minmax(0,1fr) 16px;
+    align-items:center;
+    gap:14px;
+    width:100%;
+    min-height:46px;
+    padding:0 8px;
+    text-align:left;
+    border-bottom:1px solid var(--line-soft);
+    background:transparent;
+    color:var(--fg-dim);
+    transition:background-color .18s var(--ease),color .18s var(--ease);
+  }
+  .style:last-child{border-bottom:0}
+  .style:hover{background:#151920}
+  .style:hover .style__name{color:var(--fg)}
+  .style__name{font-size:14px;letter-spacing:.03em;color:var(--fg-dim);transition:color .18s}
+  .style__spec,.style__use{font-size:12px;letter-spacing:.02em;color:var(--muted);line-height:1.5}
+  .style__use{text-align:right}
+  .style__mark{
+    width:11px;height:11px;justify-self:end;
+    border:1px solid #4a505a;
+    border-radius:1px;
+    background:transparent;
+    transition:background-color .18s,border-color .18s,box-shadow .18s;
+  }
+  .style[aria-pressed="true"]{background:#1a1711}
+  .style[aria-pressed="true"] .style__name{color:#f3dfbd}
+  .style[aria-pressed="true"] .style__spec{color:var(--fg-dim)}
+  .style[aria-pressed="true"] .style__mark{background:var(--accent);border-color:var(--accent);box-shadow:inset 0 0 0 2px #1a1711}
+  .style[aria-pressed="true"]:hover{background:#211b12}
+  .style[aria-pressed="true"]:hover .style__name{color:#fbeed6}
+  .style:not([aria-pressed="true"]):active{background:#1c2028}
+
+  /* ---------- deck / timeline ---------- */
+  .deck{
+    position:relative;
+    padding:clamp(14px,1.9vw,20px);
+    padding-bottom:clamp(10px,1.5vw,14px);
+    border-radius:0 0 3px 3px;
+    background:linear-gradient(180deg,#0c0e11 0%,#0a0b0e 100%);
+  }
+  .deck__head{display:flex;align-items:baseline;justify-content:space-between;gap:14px;margin-bottom:10px}
+  .deck__title{margin:0;font-size:12px;font-weight:500;letter-spacing:.18em;color:var(--fg-dim)}
+  .deck__title .en{font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;color:var(--muted);margin-left:10px}
+  .deck__meta{font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;color:var(--muted);white-space:nowrap}
+
+  .timeline{position:relative}
+  .ruler{position:relative;height:24px;margin-bottom:5px}
+  .ruler__label{
+    position:absolute;bottom:9px;
+    transform:translateX(-50%);
+    font-family:var(--font-mono);font-size:11px;letter-spacing:.06em;
+    color:var(--muted);white-space:nowrap;
+  }
+  .ruler__label.is-first{transform:none}
+  .ruler__label.is-last{transform:translateX(-100%)}
+  .ruler__ticks{position:absolute;left:0;right:0;bottom:0;height:6px}
+  .ruler__tick{position:absolute;bottom:0;width:1px;height:4px;background:rgba(241,233,221,.14);transform:translateX(-.5px)}
+  .ruler__tick.is-major{height:6px;background:rgba(241,233,221,.24)}
+
+  .track{
+    position:relative;
+    display:flex;
+    height:clamp(108px,12.6vh,136px);
+    background:var(--bg-deep);
+    border:1px solid #1b1f26;
+    border-radius:3px;
+    box-shadow:inset 0 3px 12px rgba(0,0,0,.62),inset 0 0 0 1px rgba(0,0,0,.45);
+  }
+  .seg{
+    position:relative;
+    height:100%;
+    min-width:0;
+    overflow:hidden;
+    display:flex;flex-direction:column;justify-content:space-between;
+    padding:11px 13px;
+    background:#101319;
+    border-right:1px solid #1d222a;
+    transition:background-color .38s var(--ease),box-shadow .38s var(--ease);
+  }
+  .seg:first-child{border-radius:2px 0 0 2px}
+  .seg:last-child{border-right:0;border-radius:0 2px 2px 0}
+  .seg:hover{background:#141820}
+  .seg__top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0}
+  .seg__idx{font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;color:var(--muted)}
+  .seg__bars{font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;color:var(--muted);white-space:nowrap}
+  .seg__name{font-size:15px;letter-spacing:.1em;color:var(--fg-dim);line-height:1.2;white-space:nowrap;transition:color .3s}
+  .seg__ticks{
+    height:8px;opacity:.55;
+    background-image:repeating-linear-gradient(90deg,rgba(241,233,221,.3) 0 1px,transparent 1px calc(100% / var(--bars,4)));
+  }
+
+  .seg.is-cued{background:#12151a;box-shadow:inset 0 1px 0 rgba(224,169,85,.32)}
+  .seg.is-active{background:#1a1712;box-shadow:inset 0 2px 0 var(--accent)}
+  .seg.is-active .seg__name{color:#f7e8d0}
+  .seg.is-active .seg__idx{color:var(--accent)}
+  .seg.is-active::after{
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(102deg,transparent 28%,rgba(224,169,85,.13) 46%,rgba(255,255,255,.06) 51%,transparent 68%);
+    animation:sheen .95s var(--ease) 1;
+  }
+  @keyframes sheen{from{transform:translateX(-115%)}to{transform:translateX(115%)}}
+
+  .seg.is-enter{animation:segIn .55s var(--ease) both;animation-delay:calc(var(--i,0) * 55ms)}
+  @keyframes segIn{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+
+  .seg.is-armed{animation:segLoad .62s var(--ease) both;animation-delay:calc(var(--i,0) * 88ms)}
+  @keyframes segLoad{
+    0%{opacity:.35;transform:translateY(7px)}
+    55%{opacity:1;transform:translateY(-3px);background-color:#1b1e25}
+    100%{opacity:1;transform:none}
+  }
+
+  .playhead{
+    position:absolute;top:-6px;bottom:-1px;left:30%;
+    width:1px;background:var(--accent);
+    transform:translateX(-50%);
+    z-index:4;pointer-events:none;
+  }
+  .playhead::before{
+    content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
+    border-left:4.5px solid transparent;
+    border-right:4.5px solid transparent;
+    border-top:6px solid var(--accent);
+  }
+
+  .legend{display:flex;flex-wrap:wrap;align-items:center;gap:5px 16px;margin-top:7px;font-family:var(--font-mono);font-size:11px;letter-spacing:.06em;color:var(--muted)}
+  .legend__cap{letter-spacing:.16em}
+  .legend__item{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .legend__swatch{width:15px;height:7px;background:#171b22;border:1px solid #2c313b;border-radius:1px;flex:none}
+  .legend__ph{width:1px;height:9px;background:var(--accent);flex:none}
+
+  .transport{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-top:11px;padding-top:11px;border-top:1px solid var(--line-soft)}
+  .transport__main,.transport__aux{display:flex;align-items:center;gap:9px;min-width:0}
+  .transport__main{flex-wrap:wrap}
+  .transport__aux{flex-wrap:wrap}
+
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:7px;
+    height:38px;padding:0 13px;
+    border:1px solid var(--line);border-radius:3px;
+    background:#0d0f13;color:var(--fg-dim);
+    font-size:12.5px;letter-spacing:.03em;
+    transition:background-color .18s var(--ease),border-color .18s var(--ease),color .18s var(--ease),transform .1s;
+  }
+  .btn:hover{background:#171b21;border-color:#39404b;color:var(--fg)}
+  .btn:active{transform:translateY(1px);background:#0b0d10}
+  .btn--sm{height:34px;padding:0 11px;font-size:12px}
+  .btn--primary{
+    height:44px;padding:0 17px;
+    background:var(--accent);border-color:var(--accent);color:#1b1205;
+    font-size:13.5px;font-weight:600;letter-spacing:.06em;
+  }
+  .btn--primary:hover{background:#eeaf63;border-color:#eeaf63;color:#150e03}
+  .btn--primary:active{background:#cd9748;border-color:#cd9748}
+  .btn .icon{display:inline-flex;align-items:center;justify-content:center;flex:none}
+  .btn .icon-pause{display:none}
+  .btn.is-playing .icon-play{display:none}
+  .btn.is-playing .icon-pause{display:inline-flex}
+
+  .timecode{
+    display:flex;align-items:baseline;gap:6px;
+    padding-left:5px;
+    font-family:var(--font-mono);font-size:17px;letter-spacing:.02em;
+    font-variant-numeric:tabular-nums;
+    color:var(--fg);white-space:nowrap;
+  }
+  .timecode__sep{font-size:12px;color:var(--muted)}
+  .timecode__total{font-size:12.5px;color:var(--muted)}
+
+  .meter{display:flex;align-items:center;gap:7px}
+  .meter__label{font-family:var(--font-mono);font-size:11px;letter-spacing:.16em;color:var(--muted)}
+  .meter__bar{
+    position:relative;display:block;width:104px;height:8px;
+    background:#08090c;border:1px solid #1c2027;border-radius:1px;overflow:hidden;
+  }
+  .meter__lit{
+    position:absolute;top:0;bottom:0;left:0;display:block;
+    width:calc(var(--lvl,0) * 100%);
+    background-image:repeating-linear-gradient(90deg,#d9cfc0 0 3px,transparent 3px 6px);
+    transition:width .12s linear;opacity:.9;
+  }
+  .meter__peak{
+    position:absolute;right:0;top:0;bottom:0;width:11px;
+    background-image:repeating-linear-gradient(90deg,var(--accent) 0 3px,transparent 3px 6px);
+    opacity:.4;
+  }
+
+  .deck__hint{
+    margin:9px 0 0;font-size:12px;line-height:1.8;letter-spacing:.01em;color:var(--muted);
+  }
+  kbd{
+    display:inline-block;vertical-align:1px;
+    font-family:var(--font-mono);font-size:11px;letter-spacing:.06em;
+    padding:2px 5px;border:1px solid #2e333d;border-bottom-width:2px;border-radius:2px;
+    color:var(--fg-dim);background:#14171c;
+  }
+  .deck__msg{
+    margin:4px 0 0;min-height:13px;
+    font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;
+    color:var(--accent-soft);opacity:0;transition:opacity .2s;
+  }
+  .deck__msg.is-on{opacity:1}
+
+  /* ---------- footer ---------- */
+  .page-foot{margin-top:auto;border-top:1px solid var(--line-soft)}
+  .page-foot .wrap{padding-top:11px;padding-bottom:15px}
+  .credits{margin:0;font-family:var(--font-mono);font-size:11px;line-height:1.95;letter-spacing:.02em;color:var(--muted)}
+
+  /* ---------- responsive ---------- */
+  @media (max-width:980px){
+    .hero{grid-template-columns:1fr;gap:16px}
+    .hero__sub{max-width:540px}
+  }
+  @media (max-width:900px){
+    .seg__idx{display:none}
+    .seg{padding:10px 10px}
+    .seg__name{font-size:14px;letter-spacing:.08em}
+  }
+  @media (max-width:760px){
+    .seg__bars{display:none}
+    .seg{padding:10px 8px}
+    .style__spec,.style__use{font-size:12px}
+  }
+  @media (max-width:600px){
+    .track{height:190px}
+    .seg{padding:0;justify-content:center;align-items:center}
+    .seg__top,.seg__ticks{display:none}
+    .seg__name{
+      writing-mode:vertical-rl;text-orientation:upright;
+      font-size:13px;letter-spacing:.26em;line-height:1;
+      padding:10px 0;
+    }
+    .legend{gap:6px 14px}
+  }
+  @media (max-width:560px){
+    .wrap{padding:0 14px}
+    .masthead .wrap{height:52px}
+    .hero__title{font-size:clamp(26px,7.4vw,31px);line-height:1.42}
+    .hero__sub{font-size:12.5px;line-height:1.9}
+    .hero{margin-bottom:18px}
+    .chip{height:44px;padding:0 12px;font-size:12.5px;min-width:50px}
+    .seed-input{height:44px}
+    .btn,.btn--sm,.btn--primary{height:44px}
+    .style{
+      min-height:56px;padding:8px 6px;
+      grid-template-columns:1fr auto;
+      grid-template-areas:"name mark" "spec spec" "use use";
+      row-gap:2px;
+    }
+    .style__name{grid-area:name}
+    .style__mark{grid-area:mark;align-self:center}
+    .style__spec{grid-area:spec;text-align:left}
+    .style__use{grid-area:use;text-align:left}
+    .console__params{gap:14px}
+    .transport{flex-direction:column;align-items:stretch}
+    .transport__main{justify-content:space-between}
+    .transport__aux{justify-content:space-between;width:100%}
+    .meter{flex:1}
+    .meter__bar{flex:1;width:auto;min-width:72px}
+    .timecode{font-size:16px}
+    .deck__meta{display:none}
+    .page-main{padding-top:22px}
+  }
+
+  @media (min-width:1160px) and (max-height:840px){
+    .page-main{padding-top:26px;padding-bottom:14px}
+    .hero{margin-bottom:20px}
+    .console{padding-top:16px;padding-bottom:16px}
+    .deck{padding-top:16px;padding-bottom:12px}
+    .deck__hint{margin-top:6px}
+    .page-foot .wrap{padding-top:10px;padding-bottom:12px}
+  }
+
+  @media (max-height:820px){
+    .page-main{padding-top:22px;padding-bottom:16px}
+    .hero{margin-bottom:20px}
+    .hero__title{font-size:clamp(28px,3.1vw,34px)}
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{
+      animation-duration:.001ms !important;
+      animation-delay:0ms !important;
+      animation-iteration-count:1 !important;
+      transition-duration:.001ms !important;
+      scroll-behavior:auto !important;
+    }
+    .ambient{animation:none}
+    .seg.is-enter,.seg.is-armed{animation:none;opacity:1;transform:none}
+    .seg.is-active::after{display:none}
+  }
+
+  .atmos{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.9}
+  @media (prefers-reduced-motion:reduce){
+    .atmos{display:none}
+  }
+#stopBtn{display:none}
+
+  @media (max-width:600px){
+    .track{height:118px}
+    .seg{padding:0 6px}
+    .seg__name{
+      writing-mode:horizontal-tb;text-orientation:mixed;
+      font-size:12px;letter-spacing:.06em;padding:0;white-space:nowrap;
+    }
+    .legend{gap:6px 12px}
+  }
+
+  .mark{
+    position:absolute;top:-7px;bottom:0;width:1px;z-index:3;pointer-events:none;
+    background:linear-gradient(180deg,rgba(224,169,85,.95),rgba(224,169,85,.25));
+  }
+  .mark::before{
+    content:"";position:absolute;top:-2px;left:-2.5px;width:6px;height:6px;border-radius:50%;
+    background:var(--accent);box-shadow:0 0 0 2px rgba(11,12,15,.9);
+  }
+  .deck__marks{
+    display:flex;align-items:center;gap:10px;margin-top:10px;
+    font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;color:var(--muted);
+  }
+  .deck__marks-label{color:var(--fg-dim);letter-spacing:.16em}
+  .deck__marks-info{flex:1;min-width:0}
+  .deck__marks-info.has{color:var(--accent-soft)}
+  #track{cursor:crosshair}
+</style>
+</head>
+<body>
+<div class="ambient" aria-hidden="true"></div>
+<div class="gridlines" aria-hidden="true"></div>
+<div class="vignette" aria-hidden="true"></div>
+<canvas class="atmos" id="atmos" aria-hidden="true"></canvas>
+
+<div class="page">
+  <header class="masthead" data-od-id="masthead">
+    <div class="wrap">
+      <div class="brand">
+        <span class="brand__mark" aria-hidden="true"></span>
+        <span class="brand__name">toy-bgm</span>
+        <span class="brand__sub">配乐生成器</span>
+      </div>
+      <div class="state" id="stateChip" data-od-id="state"><span class="state__dot" aria-hidden="true"></span><span id="stateLabel">STANDBY</span></div>
+    </div>
+  </header>
+
+  <main class="page-main">
+    <div class="wrap">
+      <section class="hero" data-od-id="hero">
+        <h1 class="hero__title" data-od-id="hero-title">按视频时长，<br>生成一首有段落的曲子</h1>
+        <p class="hero__sub" data-od-id="hero-sub">
+          <span>和声进行、声部连接与旋律动机，全部依照种子生成。</span>
+          <span>同一颗种子，结果始终一致；可导出 <em>WAV</em> 与 <em>MIDI</em>。</span>
+        </p>
+      </section>
+
+      <div class="machine" data-od-id="machine">
+
+        <section class="console" aria-label="生成参数" data-od-id="console">
+          <div class="console__params">
+            <div class="field" data-od-id="field-duration">
+              <div class="field__head"><span class="field__label">时长</span><span class="field__en">LENGTH</span></div>
+              <div class="chips" role="group" aria-label="时长">
+                <button type="button" class="chip" data-duration="45" aria-pressed="false">45 秒</button>
+                <button type="button" class="chip" data-duration="60" aria-pressed="true">1 分钟</button>
+                <button type="button" class="chip" data-duration="90" aria-pressed="false">1 分半</button>
+                <button type="button" class="chip" data-duration="180" aria-pressed="false">3 分钟</button>
+              </div>
+            </div>
+
+            <div class="field" data-od-id="field-mood">
+              <div class="field__head"><span class="field__label">情绪</span><span class="field__en">MOOD</span></div>
+              <div class="chips" role="group" aria-label="情绪">
+                <button type="button" class="chip" data-mood="平静" aria-pressed="false">平静</button>
+                <button type="button" class="chip" data-mood="温暖" aria-pressed="true">温暖</button>
+                <button type="button" class="chip" data-mood="明亮" aria-pressed="false">明亮</button>
+                <button type="button" class="chip" data-mood="紧张" aria-pressed="false">紧张</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="field field--seed" data-od-id="field-seed">
+            <div class="field__head"><span class="field__label">种子</span><span class="field__en">SEED</span></div>
+            <div class="seed-row">
+              <label class="sr-only" for="seedInput">种子数字</label>
+              <input class="seed-input" id="seedInput" type="number" inputmode="numeric" min="1" max="999999" step="1" value="2024" aria-describedby="seedStatus">
+              <button type="button" class="btn btn--sm" id="reseed" data-od-id="btn-reseed">换一个</button>
+            </div>
+            <p class="seed-status" id="seedStatus" data-od-id="seed-status" aria-live="polite">C 大调 · 18 小节 · 60.0 秒 · 4 段 · 72 BPM</p>
+          </div>
+
+          <div class="console__styles">
+            <div class="field" data-od-id="field-style">
+              <div class="field__head"><span class="field__label">风格</span><span class="field__en">STYLE</span></div>
+              <div class="styles" role="group" aria-label="风格">
+                <button type="button" class="style" data-style="lofi" data-od-id="style-lofi" aria-pressed="true">
+                  <span class="style__name">Lo-fi</span>
+                  <span class="style__spec">慢速、电钢、真鼓</span>
+                  <span class="style__use">深夜聊天 / 读书</span>
+                  <span class="style__mark" aria-hidden="true"></span>
+                </button>
+                <button type="button" class="style" data-style="piano" data-od-id="style-piano" aria-pressed="false">
+                  <span class="style__name">轻钢琴</span>
+                  <span class="style__spec">真钢琴、弦乐、留白</span>
+                  <span class="style__use">口播 / 情感</span>
+                  <span class="style__mark" aria-hidden="true"></span>
+                </button>
+                <button type="button" class="style" data-style="electro" data-od-id="style-electro" aria-pressed="false">
+                  <span class="style__name">电子</span>
+                  <span class="style__spec">四踩、侧链、琶音</span>
+                  <span class="style__use">游戏高光 / 快剪</span>
+                  <span class="style__mark" aria-hidden="true"></span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="deck" aria-labelledby="timelineTitle" data-od-id="deck">
+          <div class="deck__head">
+            <h2 class="deck__title" id="timelineTitle">时间轴<span class="en">TIMELINE</span></h2>
+            <span class="deck__meta" id="deckMeta" data-od-id="deck-meta">18 小节 · 72 BPM</span>
+          </div>
+
+          <div class="timeline" data-od-id="timeline">
+            <div class="ruler" aria-hidden="true">
+              <span class="ruler__label is-first" style="left:0%">0:00</span>
+              <span class="ruler__label" style="left:25%">0:15</span>
+              <span class="ruler__label" style="left:50%">0:30</span>
+              <span class="ruler__label" style="left:75%">0:45</span>
+              <span class="ruler__label is-last" style="left:100%">1:00</span>
+              <span class="ruler__ticks" id="rulerTicks">
+                <span class="ruler__tick is-major" style="left:0%"></span>
+                <span class="ruler__tick" style="left:22.2222%"></span>
+                <span class="ruler__tick" style="left:44.4444%"></span>
+                <span class="ruler__tick" style="left:88.8889%"></span>
+                <span class="ruler__tick is-major" style="left:100%"></span>
+              </span>
+            </div>
+
+            <div class="track" id="track" data-od-id="track">
+              <div class="seg is-enter" data-key="intro" data-od-id="seg-intro" style="width:22.2222%;--bars:4;--i:0">
+                <div class="seg__top"><span class="seg__idx">01</span><span class="seg__bars">4 小节</span></div>
+                <span class="seg__name">前奏</span>
+                <span class="seg__ticks" aria-hidden="true"></span>
+              </div>
+              <div class="seg is-enter is-cued" data-key="verse" data-od-id="seg-verse" style="width:22.2222%;--bars:4;--i:1">
+                <div class="seg__top"><span class="seg__idx">02</span><span class="seg__bars">4 小节</span></div>
+                <span class="seg__name">主歌</span>
+                <span class="seg__ticks" aria-hidden="true"></span>
+              </div>
+              <div class="seg is-enter" data-key="chorus" data-od-id="seg-chorus" style="width:44.4444%;--bars:8;--i:2">
+                <div class="seg__top"><span class="seg__idx">03</span><span class="seg__bars">8 小节</span></div>
+                <span class="seg__name">副歌</span>
+                <span class="seg__ticks" aria-hidden="true"></span>
+              </div>
+              <div class="seg is-enter" data-key="outro" data-od-id="seg-outro" style="width:11.1111%;--bars:2;--i:3">
+                <div class="seg__top"><span class="seg__idx">04</span><span class="seg__bars">2 小节</span></div>
+                <span class="seg__name">尾奏</span>
+                <span class="seg__ticks" aria-hidden="true"></span>
+              </div>
+              <div class="playhead" id="playhead" data-od-id="playhead" aria-hidden="true" style="left:30%"></div>
+            </div>
+
+            <div class="deck__marks" id="markBar">
+              <span class="deck__marks-label">卡点</span>
+              <span class="deck__marks-info" id="markInfo">点时间轴添加</span>
+              <button type="button" class="btn btn--sm" id="clearMarks" hidden>清除</button>
+            </div>
+
+            <div class="legend" data-od-id="legend">
+              <span class="legend__cap">结构</span>
+              <span class="legend__item" data-legend="intro"><i class="legend__swatch" aria-hidden="true"></i><span>前奏 4</span></span>
+              <span class="legend__item" data-legend="verse"><i class="legend__swatch" aria-hidden="true"></i><span>主歌 4</span></span>
+              <span class="legend__item" data-legend="chorus"><i class="legend__swatch" aria-hidden="true"></i><span>副歌 8</span></span>
+              <span class="legend__item" data-legend="outro"><i class="legend__swatch" aria-hidden="true"></i><span>尾奏 2</span></span>
+              <span class="legend__item"><i class="legend__ph" aria-hidden="true"></i><span>播放头</span></span>
+            </div>
+          </div>
+
+          <div class="transport" data-od-id="transport">
+            <div class="transport__main">
+              <button type="button" class="btn btn--primary" id="playBtn" data-od-id="btn-play" aria-label="播放" aria-pressed="false">
+                <span class="icon icon-play" aria-hidden="true"><svg width="11" height="12" viewBox="0 0 11 12"><path d="M0 0l11 6-11 6z" fill="currentColor"/></svg></span>
+                <span class="icon icon-pause" aria-hidden="true"><svg width="11" height="12" viewBox="0 0 11 12"><rect x="0" y="0" width="3.4" height="12" fill="currentColor"/><rect x="7.6" y="0" width="3.4" height="12" fill="currentColor"/></svg></span>
+                <span id="playLabel">播放</span>
+              </button>
+              <button type="button" class="btn" id="stopBtn" data-od-id="btn-stop" aria-label="停止">
+                <span class="icon" aria-hidden="true"><svg width="9" height="9" viewBox="0 0 9 9"><rect width="9" height="9" fill="currentColor" opacity=".85"/></svg></span>
+                <span>停止</span>
+              </button>
+              <div class="timecode" data-od-id="timecode">
+                <span id="tcNow">00:18</span>
+                <span class="timecode__sep" aria-hidden="true">/</span>
+                <span class="sr-only">总长</span>
+                <span class="timecode__total" id="tcTotal">01:00</span>
+              </div>
+            </div>
+            <div class="transport__aux">
+              <div class="meter" id="meter" data-od-id="meter" role="img" aria-label="输出电平">
+                <span class="meter__label" aria-hidden="true">LEVEL</span>
+                <span class="meter__bar"><span class="meter__lit" id="meterLit"></span><span class="meter__peak" aria-hidden="true"></span></span>
+              </div>
+              <button type="button" class="btn btn--sm" id="exportWav" data-od-id="btn-export-wav">导出 WAV</button>
+              <button type="button" class="btn btn--sm" id="exportMidi" data-od-id="btn-export-midi">MIDI</button>
+            </div>
+          </div>
+
+          <p class="deck__hint" data-od-id="hint">提示：同一颗种子永远得到同一首曲子；想换旋律，只换种子。按 <kbd>空格</kbd> 试听。</p>
+          <p class="deck__msg" id="deckMsg" role="status" aria-live="polite"></p>
+        </section>
+
+      </div>
+    </div>
+  </main>
+
+  <footer class="page-foot" data-od-id="footer">
+    <div class="wrap">
+      <p class="credits" data-od-id="credits">钢琴 Salamander Grand Piano V3 · Alexander Holm · CC BY 3.0／电钢 Pianet T · Greg Sullivan · CC BY 3.0／打击乐 VCSL · CC0</p>
+    </div>
+  </footer>
+</div>
+
+<script src="./js/atmos.js"></script>
+<script src="./js/app.js"></script>
+</body>
+</html>

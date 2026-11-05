@@ -1,0 +1,22 @@
+音乐素材署名
+==================================================
+
+钢琴：Salamander Grand Piano V3
+  作者：Alexander Holm
+  许可：CC BY 3.0（https://creativecommons.org/licenses/by/3.0/）
+  来源：https://github.com/Tonejs/audio （salamander）
+
+电钢：Hohner Pianet T
+  采样：Greg Sullivan
+  许可：CC BY 3.0（https://creativecommons.org/licenses/by/3.0/）
+  来源：https://github.com/sfzinstruments/GregSullivan.E-Pianos
+
+打击乐：Versilian Community Sample Library (VCSL)
+  作者：Versilian Studios LLC
+  许可：CC0 1.0（公有领域）
+
+说明
+--------------------------------------------------
+本作品中的所有音乐均由浏览器实时生成，
+未使用任何受版权保护的录音作品或现有歌曲片段。
+采样素材仅用于乐器音色，不包含任何乐曲。
