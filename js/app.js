@@ -1232,6 +1232,7 @@ function stop() {
   try { live.out.disconnect(); } catch (e) {}
   if (live.timer) clearInterval(live.timer);
   live = null;
+  vizStop();
 
   setPlayState(false);
   const head = $("#playhead");
@@ -1279,6 +1280,7 @@ async function play() {
   master.out.connect(an);
 
   live = { ctx, an, out: master.out, start: t0, dur, arr, timer: null };
+  vizStart();
 
   setPlayState(true);
   showMsg(style.name + " · " + fmt(dur) + " 秒 · " + arr.sections.length + " 段");
@@ -1514,6 +1516,216 @@ function exportMidi() {
   }
 }
 
+
+/* ---------------- 背景可视化 ---------------- */
+
+const VIZ = {
+  cv: null, g: null, w: 0, h: 0, dpr: 1,
+  parts: null, raf: 0, style: 0,
+  level: 0, target: 0,
+  rec: null, chunks: [], dest: null,
+};
+
+const VIZ_NAMES = ["光尘", "丝线", "等高线"];
+
+function vizResize() {
+  if (!VIZ.cv) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  VIZ.dpr = dpr;
+  VIZ.w = window.innerWidth;
+  VIZ.h = window.innerHeight;
+  VIZ.cv.width = Math.floor(VIZ.w * dpr);
+  VIZ.cv.height = Math.floor(VIZ.h * dpr);
+}
+
+function vizSeed() {
+  VIZ.parts = [];
+  for (let i = 0; i < 150; i++) {
+    VIZ.parts.push({
+      x: Math.random(), y: Math.random(), z: Math.random(),
+      p: Math.random() * Math.PI * 2,
+    });
+  }
+}
+
+function vizSection() {
+  if (!live) return { name: "", type: "", t: 0, dur: 0, p: 0 };
+  const e = Math.max(0, Math.min(live.dur, live.ctx.currentTime - live.start));
+  const bar = Math.min(live.arr.totalBars - 1, Math.floor(e / live.arr.barDur));
+  let sec = live.arr.sections[0];
+  for (let i = 0; i < live.arr.sections.length; i++) {
+    const s = live.arr.sections[i];
+    if (bar >= s.startBar && bar < s.startBar + s.bars) { sec = s; break; }
+  }
+  const NAME = { intro: "前奏", verse: "主歌", chorus: "副歌", bridge: "桥段", outro: "尾奏", loop: "循环" };
+  return { name: NAME[sec.type] || "", type: sec.type, t: e, dur: live.dur, p: e / live.dur };
+}
+
+function vizEnergy() {
+  if (!live || !live.an) return { rms: 0, low: 0, mid: 0 };
+  const buf = new Uint8Array(live.an.frequencyBinCount);
+  live.an.getByteFrequencyData(buf);
+  const band = (a, b) => {
+    let s = 0;
+    for (let i = a; i < b; i++) s += buf[i];
+    return s / ((b - a) * 255);
+  };
+  const td = new Uint8Array(live.an.fftSize);
+  live.an.getByteTimeDomainData(td);
+  let sum = 0;
+  for (let i = 0; i < td.length; i++) { const v = (td[i] - 128) / 128; sum += v * v; }
+  return { rms: Math.sqrt(sum / td.length), low: band(1, 8), mid: band(8, 40) };
+}
+
+function vizDraw(time) {
+  if (!VIZ.cv) return;
+  const g = VIZ.g;
+  const W = VIZ.w, H = VIZ.h;
+  const t = time / 1000;
+
+  VIZ.level += (VIZ.target - VIZ.level) * 0.05;
+
+  if (VIZ.level < 0.01 && VIZ.target === 0) {
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, VIZ.cv.width, VIZ.cv.height);
+    VIZ.raf = 0;
+    return;
+  }
+
+  const info = vizSection();
+  const en = vizEnergy();
+  const energy = Math.min(1, en.rms * 4);
+  const density = info.type === "chorus" ? 1 : info.type === "bridge" ? 0.4
+    : info.type === "intro" || info.type === "outro" ? 0.55 : 0.8;
+
+  g.setTransform(VIZ.dpr, 0, 0, VIZ.dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  g.globalAlpha = VIZ.level;
+
+  if (VIZ.style === 0) {
+    g.globalCompositeOperation = "lighter";
+    for (let i = 0; i < VIZ.parts.length; i++) {
+      const p = VIZ.parts[i];
+      p.y -= (0.0006 + p.z * 0.003) * (1 + energy * 1.5) * density;
+      if (p.y < -0.05) { p.y = 1.05; p.x = Math.random(); }
+      const x = (p.x + Math.sin(t * 0.4 + p.p) * 0.008) * W;
+      const y = p.y * H;
+      const r = 0.6 + p.z * 2.4 * (1 + energy * 0.6);
+      const a = 0.05 + p.z * 0.16 + energy * 0.14;
+      const grd = g.createRadialGradient(x, y, 0, x, y, r * 3.4);
+      grd.addColorStop(0, "rgba(255,220,170," + a.toFixed(3) + ")");
+      grd.addColorStop(1, "rgba(255,190,120,0)");
+      g.fillStyle = grd;
+      g.beginPath(); g.arc(x, y, r * 3.4, 0, Math.PI * 2); g.fill();
+      g.fillStyle = "rgba(255,236,200," + Math.min(0.45, a * 2).toFixed(3) + ")";
+      g.beginPath(); g.arc(x, y, Math.max(0.5, r * 0.22), 0, Math.PI * 2); g.fill();
+    }
+    g.globalCompositeOperation = "source-over";
+  } else if (VIZ.style === 1) {
+    const lines = 42;
+    g.lineWidth = 1;
+    for (let i = 0; i < lines; i++) {
+      const k = i / lines;
+      const y0 = H * (0.16 + k * 0.7);
+      const amp = (10 + en.low * 110 + en.mid * 50) * (0.35 + k * 0.9) * density;
+      g.beginPath();
+      for (let x = 0; x <= W; x += 8) {
+        const u = x / W;
+        const y = y0 + Math.sin(u * 6 + t * 0.8 + k * 5) * amp * 0.3 + Math.sin(u * 15 - t * 1.2 + k * 9) * amp * 0.12;
+        if (x === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      }
+      const a = 0.03 + (1 - Math.abs(k - 0.5) * 2) * 0.16 + energy * 0.1;
+      g.strokeStyle = "rgba(224,169,85," + a.toFixed(3) + ")";
+      g.stroke();
+    }
+  } else {
+    const cx = W * 0.5 + Math.sin(t * 0.2) * W * 0.05;
+    const cy = H * 0.55 + Math.cos(t * 0.17) * H * 0.03;
+    const rings = 12;
+    for (let i = 0; i < rings; i++) {
+      const base = (i + 1) / rings;
+      const r = Math.min(W, H) * (0.15 + base * 0.95) * (1 + energy * 0.35);
+      const a = (1 - i / rings) * (0.08 + energy * 0.34) * density + 0.02;
+      g.beginPath();
+      g.ellipse(cx, cy, r * 1.4, r * 0.78, Math.sin(t * 0.09) * 0.25, 0, Math.PI * 2);
+      g.strokeStyle = "rgba(232,196,140," + a.toFixed(3) + ")";
+      g.lineWidth = 1;
+      g.stroke();
+    }
+  }
+
+  g.globalAlpha = 1;
+  VIZ.raf = requestAnimationFrame(vizDraw);
+}
+
+function vizStart() {
+  VIZ.target = 1;
+  if (!VIZ.cv) {
+    VIZ.cv = $("#bgViz");
+    VIZ.g = VIZ.cv.getContext("2d");
+    vizResize();
+    vizSeed();
+    window.addEventListener("resize", vizResize);
+  }
+  if (VIZ.cv) VIZ.cv.classList.add("is-on");
+  if (!VIZ.raf) {
+    vizResize();
+    VIZ.raf = requestAnimationFrame(vizDraw);
+  }
+}
+
+function vizStop() {
+  VIZ.target = 0;
+  if (VIZ.cv) VIZ.cv.classList.remove("is-on");
+  if (stopRec) stopRec();
+}
+
+function stopRec() {
+  if (!VIZ.rec) return;
+  const r = VIZ.rec;
+  VIZ.rec = null;
+  try { r.stop(); } catch (e) {}
+  const btn = $("#vRec");
+  if (btn) btn.textContent = "录视频";
+  const cv = $("#bgViz");
+  if (cv) cv.classList.remove("is-rec");
+  if (VIZ.dest && live) { try { live.out.disconnect(VIZ.dest); } catch (e) {} }
+  VIZ.dest = null;
+}
+
+async function startRec() {
+  if (VIZ.rec) { stopRec(); return; }
+  if (!live) await play();
+  if (!live || !VIZ.cv) return;
+
+  const dest = AC.createMediaStreamDestination();
+  live.out.connect(dest);
+  VIZ.dest = dest;
+
+  const vs = VIZ.cv.captureStream(30);
+  const stream = new MediaStream(vs.getVideoTracks().concat(dest.stream.getAudioTracks()));
+
+  let mime = "video/webm;codecs=vp9,opus";
+  if (!window.MediaRecorder || !MediaRecorder.isTypeSupported(mime)) mime = "video/webm";
+
+  VIZ.chunks = [];
+  VIZ.rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8000000 });
+  VIZ.rec.ondataavailable = (e) => { if (e.data && e.data.size) VIZ.chunks.push(e.data); };
+  VIZ.rec.onstop = () => {
+    const blob = new Blob(VIZ.chunks, { type: "video/webm" });
+    downloadBlob(blob, "bgm-" + STYLES[state.style].id + "-" + Math.round(live ? live.dur : 0) + "s.webm");
+    showMsg("视频已导出（" + (blob.size / 1048576).toFixed(1) + " MB）");
+  };
+
+  VIZ.rec.start(1000);
+  VIZ.cv.classList.add("is-rec");
+  const btn = $("#vRec");
+  if (btn) btn.textContent = "停止录制";
+  showMsg("录制中：画面和声音实时写入，约需 " + Math.round(live.dur) + " 秒。");
+
+  setTimeout(() => { if (VIZ.rec) stopRec(); }, (live.dur + 0.6) * 1000);
+}
+
 /* ---------------- 界面 ---------------- */
 
 function saveState() {
@@ -1625,6 +1837,13 @@ document.addEventListener("keydown", (e) => {
 });
 
 $("#exportWav").addEventListener("click", () => exportWav());
+$("#vStyle").addEventListener("click", () => {
+  VIZ.style = (VIZ.style + 1) % 3;
+  const el = $("#vStyle");
+  if (el) el.textContent = "画风 · " + VIZ_NAMES[VIZ.style];
+  if (live) showMsg("背景画风：" + VIZ_NAMES[VIZ.style]);
+});
+$("#vRec").addEventListener("click", () => startRec().catch((e) => showMsg("录制失败：" + e.message, true)));
 $("#exportMidi").addEventListener("click", () => exportMidi());
 
 loadState();
