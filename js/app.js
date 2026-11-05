@@ -1366,7 +1366,8 @@ async function play() {
       TITLE.last = si;
       const NAMES = { intro: "前奏", verse: "主歌", chorus: "副歌", bridge: "桥段", outro: "尾奏", loop: "循环" };
       const sec = live.arr.sections[si];
-      showSectionTitle(NAMES[sec.type] || "", sec.type);
+      const chords = sec.progression.map((_, i) => chordLabel(live.arr, sec, i));
+      showSectionTitle(NAMES[sec.type] || "", sec.type, chords, sec.bars + " 小节 · " + Math.round(live.arr.bpm) + " BPM");
     }
 
     $("#tcNow").textContent = mmss(e);
@@ -1848,10 +1849,10 @@ async function startRec() {
 
 const TITLE = {
   cv: null, g: null, w: 0, h: 0, dpr: 1,
-  text: "", type: "", start: 0, raf: 0, last: -1,
+  text: "", type: "", chords: [], meta: "", start: 0, raf: 0, last: -1,
 };
 
-const TITLE_DUR = 2.6;
+const TITLE_DUR = 3.1;
 
 function titleResize() {
   if (!TITLE.cv) return;
@@ -1870,7 +1871,7 @@ function easeOutBack(t, s) {
 function easeInCubic(t) { return t * t * t; }
 function clamp01(v) { return v <= 0 ? 0 : v >= 1 ? 1 : v; }
 
-function showSectionTitle(text, type) {
+function showSectionTitle(text, type, chords, meta) {
   if (!TITLE.cv) {
     TITLE.cv = $("#titleLayer");
     if (!TITLE.cv) return;
@@ -1880,6 +1881,8 @@ function showSectionTitle(text, type) {
   }
   TITLE.text = text;
   TITLE.type = type || "";
+  TITLE.chords = chords || [];
+  TITLE.meta = meta || "";
   TITLE.start = performance.now();
   if (!TITLE.raf) TITLE.raf = requestAnimationFrame(titleDraw);
 }
@@ -1900,6 +1903,20 @@ function titleDraw(now) {
 
   const chars = Array.from(TITLE.text);
   const base = TITLE.type === "chorus" ? Math.min(W * 0.088, H * 0.135) : Math.min(W * 0.062, H * 0.1);
+  const size0 = base;
+
+  // 卡片背后压一层暗场，让字从表单上浮出来（随卡片一起淡入淡出）
+  const cardA = p < 0.28 ? p / 0.28 : p > 2.55 ? Math.max(0, 1 - (p - 2.55) / 0.55) : 1;
+  if (cardA > 0.01) {
+    const cg = g.createRadialGradient(W / 2, H * 0.34 + size0 * 0.35, size0 * 0.2, W / 2, H * 0.34 + size0 * 0.35, size0 * 4.2);
+    cg.addColorStop(0, "rgba(6,7,10,0.82)");
+    cg.addColorStop(0.55, "rgba(6,7,10,0.55)");
+    cg.addColorStop(1, "rgba(6,7,10,0)");
+    g.globalAlpha = cardA;
+    g.fillStyle = cg;
+    g.fillRect(0, 0, W, H);
+    g.globalAlpha = 1;
+  }
   const size = base;
   g.font = "650 " + size + "px 'Segoe UI', 'Microsoft YaHei', sans-serif";
   g.textAlign = "center";
@@ -1912,7 +1929,7 @@ function titleDraw(now) {
   const y = H * 0.34;
 
   const inP = 0.62;
-  const holdEnd = 1.75;
+  const holdEnd = 2.15;
 
   for (let i = 0; i < chars.length; i++) {
     const cw = widths[i];
@@ -1962,6 +1979,62 @@ function titleDraw(now) {
 
   g.filter = "none";
 
+  // 和弦行：逐项错峰入场，当前小节高亮
+  if (TITLE.chords.length) {
+    const mono = "600 " + Math.round(size * 0.24) + "px ui-monospace, 'Cascadia Mono', Consolas, monospace";
+    g.font = mono;
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+
+    const items = TITLE.chords;
+    const cgap = size * 0.34;
+    const widths = items.map((c) => g.measureText(c).width + cgap);
+    const totalW = widths.reduce((a, b) => a + b, 0) - cgap;
+    let cx = W / 2 - totalW / 2;
+    const cy = y + size * 0.92;
+
+    let activeIdx = 0;
+    if (live) {
+      const e = Math.max(0, live.ctx.currentTime - live.start);
+      const barIdx = Math.floor(e / live.arr.barDur);
+      for (let k = 0; k < live.arr.sections.length; k++) {
+        const sec = live.arr.sections[k];
+        if (barIdx >= sec.startBar && barIdx < sec.startBar + sec.bars) {
+          activeIdx = (barIdx - sec.startBar) % items.length;
+          break;
+        }
+      }
+    }
+
+    for (let i = 0; i < items.length; i++) {
+      const cw = widths[i];
+      const px = cx + cw / 2 - cgap / 2;
+      cx += cw;
+
+      const d = 0.34 + i * 0.07;
+      const q = clamp01((p - d) / 0.45);
+      if (q <= 0) continue;
+      const e2 = easeOutBack(q, 1.8);
+      const isOn = i === activeIdx;
+      g.globalAlpha = q * (isOn ? 0.98 : 0.5);
+      const sc = (isOn ? 1.08 : 0.96) * (0.9 + 0.1 * e2);
+      g.save();
+      g.translate(px, cy + (1 - e2) * size * 0.18);
+      g.scale(sc, sc);
+      g.fillStyle = isOn ? "rgba(224,169,85,0.98)" : "rgba(241,233,221,0.6)";
+      g.fillText(items[i], 0, 0);
+      g.restore();
+    }
+
+    if (TITLE.meta) {
+      g.globalAlpha = clamp01((p - 0.55) / 0.4) * 0.45;
+      g.font = "500 " + Math.round(size * 0.13) + "px ui-monospace, Consolas, monospace";
+      g.fillStyle = "rgba(241,233,221,0.8)";
+      g.fillText(TITLE.meta, W / 2, cy + size * 0.42);
+    }
+  }
+
+  g.globalAlpha = 1;
   TITLE.raf = requestAnimationFrame(titleDraw);
 }
 
