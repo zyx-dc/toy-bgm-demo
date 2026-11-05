@@ -1880,5 +1880,6 @@ $("#vRec").addEventListener("click", () => startRec().catch((e) => showMsg("å½•å
 $("#exportMidi").addEventListener("click", () => exportMidi());
 
 loadState();
+buildUI();
 syncUI();
 rebuild();
