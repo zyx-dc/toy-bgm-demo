@@ -526,11 +526,18 @@
   @media (prefers-reduced-motion:reduce){ .bgviz{display:none} }
   /* 卡点行暂未接入交互，先隐藏 */
   .deck__marks{display:none}
+
+  .titlelayer{
+    position:fixed;inset:0;z-index:3;pointer-events:none;
+    width:100%;height:100%;
+  }
+  @media (prefers-reduced-motion:reduce){ .titlelayer{display:none} }
 </style>
 </head>
 <body>
 <div class="ambient" aria-hidden="true"></div>
 <canvas class="bgviz" id="bgViz" aria-hidden="true"></canvas>
+<canvas class="titlelayer" id="titleLayer" aria-hidden="true"></canvas>
 <div class="gridlines" aria-hidden="true"></div>
 <div class="vignette" aria-hidden="true"></div>
 <canvas class="atmos" id="atmos" aria-hidden="true"></canvas>

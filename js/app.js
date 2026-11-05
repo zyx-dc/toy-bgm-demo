@@ -1235,6 +1235,11 @@ function stop() {
   vizStop();
 
   setPlayState(false);
+  TITLE.last = -1;
+  if (TITLE.g) {
+    TITLE.g.setTransform(1, 0, 0, 1, 0, 0);
+    TITLE.g.clearRect(0, 0, TITLE.cv.width, TITLE.cv.height);
+  }
   const head = $("#playhead");
   if (head) head.style.left = "0%";
   $("#tcNow").textContent = "00:00";
@@ -1300,6 +1305,13 @@ async function play() {
       if (barIdx >= s.startBar && barIdx < s.startBar + s.bars) { si = i; break; }
     }
     highlight(si);
+
+    if (si !== TITLE.last) {
+      TITLE.last = si;
+      const NAMES = { intro: "前奏", verse: "主歌", chorus: "副歌", bridge: "桥段", outro: "尾奏", loop: "循环" };
+      const sec = live.arr.sections[si];
+      showSectionTitle(NAMES[sec.type] || "", sec.type);
+    }
 
     $("#tcNow").textContent = mmss(e);
     if (head) head.style.left = ((e / live.dur) * 100).toFixed(2) + "%";
@@ -1757,6 +1769,127 @@ async function startRec() {
   showMsg("录制中：画面和声音实时写入，约需 " + Math.round(live.dur) + " 秒。");
 
   setTimeout(() => { if (VIZ.rec) stopRec(); }, (live.dur + 0.6) * 1000);
+}
+
+
+/* ---------------- 段落标题动画（参考 Folia 的逐字入场 / 强调 / 退场） ---------------- */
+
+const TITLE = {
+  cv: null, g: null, w: 0, h: 0, dpr: 1,
+  text: "", type: "", start: 0, raf: 0, last: -1,
+};
+
+const TITLE_DUR = 2.6;
+
+function titleResize() {
+  if (!TITLE.cv) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  TITLE.dpr = dpr;
+  TITLE.w = window.innerWidth;
+  TITLE.h = window.innerHeight;
+  TITLE.cv.width = Math.floor(TITLE.w * dpr);
+  TITLE.cv.height = Math.floor(TITLE.h * dpr);
+}
+
+function easeOutBack(t, s) {
+  s = s === undefined ? 1.70158 : s;
+  return 1 + (s + 1) * Math.pow(t - 1, 3) + s * Math.pow(t - 1, 2);
+}
+function easeInCubic(t) { return t * t * t; }
+function clamp01(v) { return v <= 0 ? 0 : v >= 1 ? 1 : v; }
+
+function showSectionTitle(text, type) {
+  if (!TITLE.cv) {
+    TITLE.cv = $("#titleLayer");
+    if (!TITLE.cv) return;
+    TITLE.g = TITLE.cv.getContext("2d");
+    titleResize();
+    window.addEventListener("resize", titleResize);
+  }
+  TITLE.text = text;
+  TITLE.type = type || "";
+  TITLE.start = performance.now();
+  if (!TITLE.raf) TITLE.raf = requestAnimationFrame(titleDraw);
+}
+
+function titleDraw(now) {
+  const g = TITLE.g;
+  if (!g) return;
+  const W = TITLE.w, H = TITLE.h;
+  const p = (now - TITLE.start) / 1000;
+
+  g.setTransform(TITLE.dpr, 0, 0, TITLE.dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+
+  if (p > TITLE_DUR) {
+    TITLE.raf = 0;
+    return;
+  }
+
+  const chars = Array.from(TITLE.text);
+  const base = TITLE.type === "chorus" ? Math.min(W * 0.088, H * 0.135) : Math.min(W * 0.062, H * 0.1);
+  const size = base;
+  g.font = "650 " + size + "px 'Segoe UI', 'Microsoft YaHei', sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+
+  const gap = size * 0.08;
+  const widths = chars.map((c) => g.measureText(c).width + gap);
+  const total = widths.reduce((s, v) => s + v, 0) - gap;
+  let x = W / 2 - total / 2;
+  const y = H * 0.34;
+
+  const inP = 0.62;
+  const holdEnd = 1.75;
+
+  for (let i = 0; i < chars.length; i++) {
+    const cw = widths[i];
+    const cx = x + cw / 2 - gap / 2;
+    x += cw;
+
+    const delay = i * 0.055;
+    let dy = 0, alpha = 1, rot = 0, scale = 1, blur = 0;
+
+    if (p < inP) {
+      const q = clamp01((p - delay) / (inP - delay));
+      const e = easeOutBack(q, 2.1);
+      dy = -(1 - e) * size * 1.15;
+      alpha = clamp01(q * 3);
+      rot = (q - 1) * 0.10;
+      scale = 0.92 + 0.08 * e;
+      blur = (1 - q) * 6;
+    } else if (p < holdEnd) {
+      const q = (p - inP) / (holdEnd - inP);
+      const e = p < inP ? 0 : 1;
+      scale = 1 + 0.012 * Math.sin(q * Math.PI * 2);
+      alpha = 1;
+      dy = 0;
+      rot = 0;
+      blur = 0;
+    } else {
+      const q = clamp01((p - holdEnd) / (TITLE_DUR - holdEnd));
+      const e = easeInCubic(q);
+      dy = -size * 2.0 * e;
+      alpha = 1 - Math.pow(q, 1.3);
+      scale = 1 + 0.06 * q;
+      blur = q * 8;
+    }
+
+    g.save();
+    g.globalAlpha = alpha * 0.92;
+    g.translate(cx, y + dy);
+    g.rotate(rot);
+    g.scale(scale, scale);
+    if (blur > 0.4) g.filter = "blur(" + blur.toFixed(1) + "px)";
+    else g.filter = "none";
+    g.fillStyle = "rgba(247,232,208,0.96)";
+    g.fillText(chars[i], 0, 0);
+    g.restore();
+  }
+
+  g.filter = "none";
+
+  TITLE.raf = requestAnimationFrame(titleDraw);
 }
 
 /* ---------------- 界面 ---------------- */
