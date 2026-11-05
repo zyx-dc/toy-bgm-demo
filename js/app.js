@@ -1110,6 +1110,38 @@ function mmss(sec) {
   return pad2(Math.floor(s / 60)) + ":" + pad2(s % 60);
 }
 
+function chordLabel(arr, sec, idx) {
+  const scale = SCALES[arr.mode];
+  const d = sec.progression[idx % sec.progression.length];
+  const rootPc = (arr.root + degreeOffset(scale, d)) % 12;
+  const third = degreeOffset(scale, d + 2) - degreeOffset(scale, d);
+  const fifth = degreeOffset(scale, d + 4) - degreeOffset(scale, d);
+  let suf = "";
+  if (fifth === 6) suf = "°";
+  else if (third === 3) suf = "m";
+  return NOTE_NAMES[rootPc] + suf;
+}
+
+function renderChords(sec, bar) {
+  const el = $("#chordLine");
+  if (!el) return;
+  const arr = currentArr();
+  const n = sec.progression.length;
+  const active = bar % n;
+
+  const key = arr.sections.indexOf(sec) + ":" + n;
+  if (el.dataset.key !== key) {
+    el.dataset.key = key;
+    el.innerHTML = '<span class="cl-label">和声</span>' +
+      sec.progression.map((_, i) => '<span class="ch">' + chordLabel(arr, sec, i) + "</span>").join("") +
+      '<span class="cl-pos"></span>';
+  }
+  const chips = el.querySelectorAll(".ch");
+  chips.forEach((c, i) => c.classList.toggle("on", i === active));
+  const pos = el.querySelector(".cl-pos");
+  if (pos) pos.textContent = "第 " + (bar + 1) + " / " + sec.bars + " 小节";
+}
+
 function buildRuler(arr) {
   const ruler = document.querySelector(".ruler");
   const ticks = $("#rulerTicks");
@@ -1179,6 +1211,30 @@ function renderTimeline() {
   const head0 = $("#playhead");
   if (head0) head0.style.left = "0%";
   $("#tcTotal").textContent = mmss(arr.seconds);
+  renderMarks();
+}
+
+function renderMarks() {
+  const track = $("#track");
+  if (!track) return;
+  const arr = currentArr();
+  track.querySelectorAll(".mark").forEach((el) => el.remove());
+
+  arr.marks.forEach((m) => {
+    const el = document.createElement("span");
+    el.className = "mark";
+    el.style.left = (m / arr.seconds * 100) + "%";
+    el.dataset.t = String(m);
+    track.appendChild(el);
+  });
+
+  const info = $("#markInfo");
+  const clear = $("#clearMarks");
+  if (info) {
+    info.textContent = arr.marks.length ? "已标 " + arr.marks.length + " 个点 · 再点一次删除" : "点时间轴添加";
+    info.classList.toggle("has", arr.marks.length > 0);
+  }
+  if (clear) clear.hidden = arr.marks.length === 0;
 }
 
 function highlight(idx) {
@@ -1315,6 +1371,10 @@ async function play() {
 
     $("#tcNow").textContent = mmss(e);
     if (head) head.style.left = ((e / live.dur) * 100).toFixed(2) + "%";
+
+    const curSec = live.arr.sections[si];
+    const barInSec = barIdx - curSec.startBar;
+    renderChords(curSec, barInSec);
 
     live.an.getByteTimeDomainData(meterBuf);
     let sum = 0;
@@ -1910,7 +1970,7 @@ function titleDraw(now) {
 function saveState() {
   try {
     localStorage.setItem("bgm-prefs", JSON.stringify({
-      style: state.style, seconds: state.seconds, seed: state.seed, emotion: state.emotion,
+      style: state.style, seconds: state.seconds, seed: state.seed, emotion: state.emotion, marks: state.marks,
     }));
   } catch (e) {}
 }
@@ -1923,6 +1983,7 @@ function loadState() {
     if (s.seconds) state.seconds = s.seconds;
     if (s.seed) state.seed = s.seed;
     if (s.emotion && EMOTIONS[s.emotion]) state.emotion = s.emotion;
+    if (Array.isArray(s.marks)) state.marks = s.marks.filter((m) => typeof m === "number" && m > 0);
   } catch (e) {}
 }
 
@@ -2013,6 +2074,28 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
   if (live) stop();
   else play().catch((err) => showMsg("播放失败：" + err.message, true));
+});
+
+$("#track").addEventListener("click", (e) => {
+  const arr = currentArr();
+  const r = e.currentTarget.getBoundingClientRect();
+  const x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  const t = x * arr.seconds;
+  const step = arr.barDur / 16;
+  const snapped = Math.round(t / step) * step;
+  const near = state.marks.findIndex((m) => Math.abs(m - snapped) < step * 0.75);
+  if (near >= 0) state.marks.splice(near, 1);
+  else if (state.marks.length < 16) state.marks.push(Math.max(0.1, snapped));
+  state.marks.sort((a, b) => a - b);
+  saveState();
+  rebuild();
+});
+
+$("#clearMarks").addEventListener("click", () => {
+  state.marks = [];
+  saveState();
+  rebuild();
+  showMsg("已清除全部卡点");
 });
 
 $("#exportWav").addEventListener("click", () => exportWav());
