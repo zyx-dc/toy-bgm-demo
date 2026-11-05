@@ -1526,7 +1526,21 @@ const VIZ = {
   rec: null, chunks: [], dest: null,
 };
 
-const VIZ_NAMES = ["光尘", "丝线", "等高线"];
+const VIZ_NAMES = ["光尘", "丝线", "等高线", "关闭"];
+
+function makeSprite() {
+  const c = document.createElement("canvas");
+  const S = 64;
+  c.width = c.height = S;
+  const g = c.getContext("2d");
+  const grd = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  grd.addColorStop(0, "rgba(255,232,196,1)");
+  grd.addColorStop(0.35, "rgba(255,206,150,0.55)");
+  grd.addColorStop(1, "rgba(255,190,120,0)");
+  g.fillStyle = grd;
+  g.fillRect(0, 0, S, S);
+  return c;
+}
 
 function vizResize() {
   if (!VIZ.cv) return;
@@ -1561,24 +1575,40 @@ function vizSection() {
   return { name: NAME[sec.type] || "", type: sec.type, t: e, dur: live.dur, p: e / live.dur };
 }
 
+let vizFreqBuf = null;
+let vizTimeBuf = null;
+
 function vizEnergy() {
   if (!live || !live.an) return { rms: 0, low: 0, mid: 0 };
-  const buf = new Uint8Array(live.an.frequencyBinCount);
+  if (!vizFreqBuf || vizFreqBuf.length !== live.an.frequencyBinCount) {
+    vizFreqBuf = new Uint8Array(live.an.frequencyBinCount);
+  }
+  const buf = vizFreqBuf;
   live.an.getByteFrequencyData(buf);
   const band = (a, b) => {
     let s = 0;
     for (let i = a; i < b; i++) s += buf[i];
     return s / ((b - a) * 255);
   };
-  const td = new Uint8Array(live.an.fftSize);
+  if (!vizTimeBuf || vizTimeBuf.length !== live.an.fftSize) {
+    vizTimeBuf = new Uint8Array(live.an.fftSize);
+  }
+  const td = vizTimeBuf;
   live.an.getByteTimeDomainData(td);
   let sum = 0;
   for (let i = 0; i < td.length; i++) { const v = (td[i] - 128) / 128; sum += v * v; }
   return { rms: Math.sqrt(sum / td.length), low: band(1, 8), mid: band(8, 40) };
 }
 
+let vizLastFrame = 0;
+
 function vizDraw(time) {
   if (!VIZ.cv) return;
+  if (time - vizLastFrame < 30) {
+    VIZ.raf = requestAnimationFrame(vizDraw);
+    return;
+  }
+  vizLastFrame = time;
   const g = VIZ.g;
   const W = VIZ.w, H = VIZ.h;
   const t = time / 1000;
@@ -1589,6 +1619,13 @@ function vizDraw(time) {
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, VIZ.cv.width, VIZ.cv.height);
     VIZ.raf = 0;
+    return;
+  }
+
+  if (VIZ.style === 3) {
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, VIZ.cv.width, VIZ.cv.height);
+    VIZ.raf = requestAnimationFrame(vizDraw);
     return;
   }
 
@@ -1603,6 +1640,7 @@ function vizDraw(time) {
   g.globalAlpha = VIZ.level;
 
   if (VIZ.style === 0) {
+    if (!VIZ.sprite) VIZ.sprite = makeSprite();
     g.globalCompositeOperation = "lighter";
     for (let i = 0; i < VIZ.parts.length; i++) {
       const p = VIZ.parts[i];
@@ -1610,16 +1648,11 @@ function vizDraw(time) {
       if (p.y < -0.05) { p.y = 1.05; p.x = Math.random(); }
       const x = (p.x + Math.sin(t * 0.4 + p.p) * 0.008) * W;
       const y = p.y * H;
-      const r = 0.6 + p.z * 2.4 * (1 + energy * 0.6);
-      const a = 0.05 + p.z * 0.16 + energy * 0.14;
-      const grd = g.createRadialGradient(x, y, 0, x, y, r * 3.4);
-      grd.addColorStop(0, "rgba(255,220,170," + a.toFixed(3) + ")");
-      grd.addColorStop(1, "rgba(255,190,120,0)");
-      g.fillStyle = grd;
-      g.beginPath(); g.arc(x, y, r * 3.4, 0, Math.PI * 2); g.fill();
-      g.fillStyle = "rgba(255,236,200," + Math.min(0.45, a * 2).toFixed(3) + ")";
-      g.beginPath(); g.arc(x, y, Math.max(0.5, r * 0.22), 0, Math.PI * 2); g.fill();
+      const r = (0.6 + p.z * 2.4 * (1 + energy * 0.6)) * 3.4;
+      g.globalAlpha = VIZ.level * Math.min(0.75, 0.18 + p.z * 0.3 + energy * 0.25);
+      g.drawImage(VIZ.sprite, x - r, y - r, r * 2, r * 2);
     }
+    g.globalAlpha = VIZ.level;
     g.globalCompositeOperation = "source-over";
   } else if (VIZ.style === 1) {
     const lines = 42;
@@ -1838,7 +1871,7 @@ document.addEventListener("keydown", (e) => {
 
 $("#exportWav").addEventListener("click", () => exportWav());
 $("#vStyle").addEventListener("click", () => {
-  VIZ.style = (VIZ.style + 1) % 3;
+  VIZ.style = (VIZ.style + 1) % VIZ_NAMES.length;
   const el = $("#vStyle");
   if (el) el.textContent = "画风 · " + VIZ_NAMES[VIZ.style];
   if (live) showMsg("背景画风：" + VIZ_NAMES[VIZ.style]);
