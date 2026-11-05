@@ -1753,7 +1753,7 @@ function vizDraw(time) {
         if (x === 0) g.moveTo(x, y); else g.lineTo(x, y);
       }
       const a = 0.03 + (1 - Math.abs(k - 0.5) * 2) * 0.16 + energy * 0.1;
-      g.strokeStyle = "rgba(224,169,85," + a.toFixed(3) + ")";
+      g.strokeStyle = "rgba(201,161,94," + a.toFixed(3) + ")";
       g.stroke();
     }
   } else {
@@ -2021,7 +2021,7 @@ function titleDraw(now) {
       g.save();
       g.translate(px, cy + (1 - e2) * size * 0.18);
       g.scale(sc, sc);
-      g.fillStyle = isOn ? "rgba(224,169,85,0.98)" : "rgba(241,233,221,0.6)";
+      g.fillStyle = isOn ? "rgba(201,161,94,0.98)" : "rgba(241,233,221,0.6)";
       g.fillText(items[i], 0, 0);
       g.restore();
     }
