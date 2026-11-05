@@ -1590,6 +1590,16 @@ function vizSection() {
 let vizFreqBuf = null;
 let vizTimeBuf = null;
 
+function beatPulse() {
+  if (!live) return { p: 0, down: false };
+  const e = Math.max(0, live.ctx.currentTime - live.start);
+  const beatDur = live.arr.barDur / 4;
+  const b = e / beatDur;
+  const idx = Math.floor(b);
+  const frac = b - idx;
+  return { p: Math.pow(1 - frac, 3), down: idx % 4 === 0 };
+}
+
 function vizEnergy() {
   if (!live || !live.an) return { rms: 0, low: 0, mid: 0 };
   if (!vizFreqBuf || vizFreqBuf.length !== live.an.frequencyBinCount) {
@@ -1643,7 +1653,9 @@ function vizDraw(time) {
 
   const info = vizSection();
   const en = vizEnergy();
-  const energy = Math.min(1, en.rms * 4);
+  const bp = beatPulse();
+  const pulse = bp.p * (bp.down ? 1 : 0.45);
+  const energy = Math.min(1.2, en.rms * 4 * (1 + pulse * 0.55));
   const density = info.type === "chorus" ? 1 : info.type === "bridge" ? 0.4
     : info.type === "intro" || info.type === "outro" ? 0.55 : 0.8;
 
@@ -1860,10 +1872,11 @@ function titleDraw(now) {
       blur = (1 - q) * 6;
     } else if (p < holdEnd) {
       const q = (p - inP) / (holdEnd - inP);
-      const e = p < inP ? 0 : 1;
-      scale = 1 + 0.012 * Math.sin(q * Math.PI * 2);
+      const bpm = beatPulse();
+      const hit = bpm.p * (bpm.down ? 1 : 0.5);
+      scale = 1 + 0.012 * Math.sin(q * Math.PI * 2) + hit * (bpm.down ? 0.045 : 0.022);
       alpha = 1;
-      dy = 0;
+      dy = -hit * size * 0.035;
       rot = 0;
       blur = 0;
     } else {
